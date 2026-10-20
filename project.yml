@@ -1,0 +1,73 @@
+# XcodeGen 工程描述。在 Mac 上执行：
+#   brew install xcodegen
+#   xcodegen generate
+# 会生成 WatchMemo.xcodeproj（不要手动修改生成的工程，改这里再重新生成）。
+name: WatchMemo
+
+options:
+  bundleIdPrefix: com.kyte
+  deploymentTarget:
+    iOS: "17.0"
+    watchOS: "10.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""          # ← 填入你的 Apple Developer Team ID
+
+targets:
+  WatchMemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: WatchMemo
+      - path: Shared
+    info:
+      path: WatchMemo/Info.plist
+      properties:
+        CFBundleDisplayName: WatchMemo
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true          # 允许在“文件”App / Finder 中直接查看 Documents
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kyte.watchmemo
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - target: WatchMemoWatch
+
+  WatchMemoWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: WatchMemoWatch
+      - path: Shared
+    info:
+      path: WatchMemoWatch/Info.plist
+      properties:
+        CFBundleDisplayName: WatchMemo
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.kyte.watchmemo
+        WKRunsIndependentlyOfCompanionApp: false
+        NSMicrophoneUsageDescription: WatchMemo 需要使用麦克风录制你的对话和会议。
+        NSHealthShareUsageDescription: 仅用于启动体能训练会话，让录音在放下手腕后继续，不读取任何健康数据。
+        NSHealthUpdateUsageDescription: 仅用于启动体能训练会话，让录音在放下手腕后继续。
+        UIBackgroundModes: [audio, workout-processing]
+        WKBackgroundModes: [physical-therapy]
+    entitlements:
+      path: WatchMemoWatch/WatchMemoWatch.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kyte.watchmemo.watchkitapp
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: YES

@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile iOS + watchOS (unsigned)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -Ei "iphoneos|watchos"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (Release, generic iOS device, no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project WatchMemo.xcodeproj \
+            -scheme WatchMemo \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+
+      - name: Verify watch app is embedded
+        run: |
+          APP=build/Build/Products/Release-iphoneos/WatchMemo.app
+          echo "== iOS app contents =="; ls "$APP"
+          if [ ! -d "$APP/Watch" ]; then
+            echo "::error::Watch app is NOT embedded in WatchMemo.app/Watch — check project.yml dependency/embed settings"
+            exit 1
+          fi
+          echo "== Embedded watch app =="; ls "$APP/Watch"
+          /usr/libexec/PlistBuddy -c "Print :WKCompanionAppBundleIdentifier" "$APP"/Watch/*.app/Info.plist
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/WatchMemo.app Payload/
+          zip -qry WatchMemo-unsigned.ipa Payload
+          ls -lh WatchMemo-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: WatchMemo-unsigned-ipa
+          path: WatchMemo-unsigned.ipa
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7

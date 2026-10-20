@@ -1,0 +1,7 @@
+.DS_Store
+# XcodeGen 生成的工程，改 project.yml 后重新生成
+*.xcodeproj
+xcuserdata/
+DerivedData/
+build/
+*.ipa
