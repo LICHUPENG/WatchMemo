@@ -1,16 +1,25 @@
 import Foundation
+import AVFAudio
 
 struct StoredSegment: Codable, Hashable, Identifiable {
     var index: Int
     var sha256: String
     var byteCount: Int64
-    var duration: TimeInterval
+    var duration: TimeInterval          // 手表报告的墙钟时长（恢复分段为 0）
     var startedAt: Date
     var receivedAt: Date
     var recovered: Bool
+    var audioDuration: TimeInterval?    // iPhone 读取文件得到的真实音频时长
+    var playable: Bool?                 // 文件能否被解码（App 被杀时的分段可能为 false）
 
     var id: Int { index }
     var fileName: String { SegmentInfo.fileName(for: index) }
+
+    /// 播放与时间轴使用的时长：优先真实音频时长。
+    var effectiveDuration: TimeInterval {
+        if let d = audioDuration, d > 0 { return d }
+        return duration
+    }
 }
 
 struct StoredRecording: Codable, Hashable, Identifiable {
@@ -19,10 +28,19 @@ struct StoredRecording: Codable, Hashable, Identifiable {
     var expectedSegmentCount: Int?         // 收到手表“结束标记”后才知道
     var endedAt: Date?
     var firstReceivedAt: Date
+    var audioPurged: Bool?                 // 按保留策略清理了原始音频（文字保留）
 
     var startedAt: Date { segments.map(\.startedAt).min() ?? firstReceivedAt }
-    var totalDuration: TimeInterval { segments.reduce(0) { $0 + $1.duration } }
+    var totalDuration: TimeInterval { segments.reduce(0) { $0 + $1.effectiveDuration } }
     var totalBytes: Int64 { segments.reduce(0) { $0 + $1.byteCount } }
+    var isAudioPurged: Bool { audioPurged == true }
+
+    /// 估算的结束时间：优先结束标记，否则用最后一段的开始 + 时长。
+    var approxEnd: Date {
+        if let endedAt { return endedAt }
+        if let last = segments.last { return last.startedAt.addingTimeInterval(last.effectiveDuration) }
+        return startedAt
+    }
 
     var missingIndices: [Int] {
         let have = Set(segments.map(\.index))
@@ -39,6 +57,17 @@ struct StoredRecording: Codable, Hashable, Identifiable {
     }
 
     var isComplete: Bool { expectedSegmentCount != nil && missingIndices.isEmpty }
+
+    /// 每个分段在“连续播放时间轴”上的起点（暂停造成的间隔不计入）。
+    func segmentOffsets() -> [Int: TimeInterval] {
+        var t: TimeInterval = 0
+        var result: [Int: TimeInterval] = [:]
+        for s in segments {
+            result[s.index] = t
+            t += s.effectiveDuration
+        }
+        return result
+    }
 }
 
 struct SyncStats: Codable {
@@ -48,8 +77,8 @@ struct SyncStats: Codable {
     var logs = 0
 }
 
-/// 阶段 A 用简单的 JSON 索引（Documents/index.json）保存元数据；
-/// 阶段 B 再换成 SwiftData / SQLite。音频文件与索引分开存放，索引只存相对信息。
+/// 录音元数据索引（Documents/index.json）。音频文件与索引分开存放。
+/// 转录、摘要等文字数据由 MemoStore 单独保存。
 final class RecordingStore: ObservableObject {
     static let shared = RecordingStore()
 
@@ -62,6 +91,11 @@ final class RecordingStore: ObservableObject {
 
     @Published private(set) var recordings: [StoredRecording] = []
     @Published private(set) var stats = SyncStats()
+
+    /// 新分段落盘后回调（在任意线程调用）。
+    var onSegmentStored: (@Sendable (UUID, Int) -> Void)?
+    /// 收到结束标记后回调（在任意线程调用）。
+    var onRecordingEnded: (@Sendable (UUID) -> Void)?
 
     private var byId: [UUID: StoredRecording] = [:]
     private var statsStorage = SyncStats()
@@ -78,11 +112,35 @@ final class RecordingStore: ObservableObject {
         publish()
     }
 
-    func fileURL(_ recording: StoredRecording, _ segment: StoredSegment) -> URL {
-        AppPaths.recordings
-            .appendingPathComponent(recording.id.uuidString, isDirectory: true)
-            .appendingPathComponent(segment.fileName)
+    // MARK: - 读取
+
+    func recording(_ id: UUID) -> StoredRecording? {
+        lock.lock(); defer { lock.unlock() }
+        return byId[id]
     }
+
+    func snapshot() -> [StoredRecording] {
+        lock.lock(); defer { lock.unlock() }
+        return byId.values.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func fileURL(_ recording: StoredRecording, _ segment: StoredSegment) -> URL {
+        fileURL(recording.id, segment.index)
+    }
+
+    func fileURL(_ id: UUID, _ index: Int) -> URL {
+        AppPaths.recordings
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+            .appendingPathComponent(SegmentInfo.fileName(for: index))
+    }
+
+    /// 某天之内的所有录音（按开始时间升序）。
+    func recordings(on day: Date) -> [StoredRecording] {
+        let cal = Calendar.current
+        return snapshot().filter { cal.isDate($0.startedAt, inSameDayAs: day) }.sorted { $0.startedAt < $1.startedAt }
+    }
+
+    // MARK: - 接收
 
     /// 必须在 WCSession 的 didReceive(file:) 回调中同步调用：回调返回后系统会删除临时文件。
     func ingest(fileAt tempURL: URL, info: SegmentInfo) -> IngestResult {
@@ -94,14 +152,12 @@ final class RecordingStore: ObservableObject {
         }
 
         lock.lock()
-        defer {
-            lock.unlock()
-            publish()
-        }
 
         guard actual == info.sha256 else {
             statsStorage.checksumFailures += 1
             save()
+            lock.unlock()
+            publish()
             return .checksumMismatch(actual: actual)
         }
 
@@ -112,6 +168,8 @@ final class RecordingStore: ObservableObject {
            FileManager.default.fileExists(atPath: fileURL(rec, existing).path) {
             statsStorage.duplicates += 1
             save()
+            lock.unlock()
+            publish()
             return .duplicate
         }
 
@@ -122,17 +180,34 @@ final class RecordingStore: ObservableObject {
             }
             try FileManager.default.moveItem(at: tempURL, to: dest)
         } catch {
+            lock.unlock()
             return .failed("保存分段失败：\(error.localizedDescription)")
+        }
+
+        let probe = Self.probeAudio(dest)
+        var startedAt = info.startedAt
+        // 恢复分段的开始时间来自文件创建时间，可能偏晚；用上一段推算更准确
+        if info.recovered, let prev = rec.segments.last(where: { $0.index == info.segmentIndex - 1 }) {
+            startedAt = prev.startedAt.addingTimeInterval(prev.effectiveDuration)
         }
 
         rec.segments.removeAll { $0.index == info.segmentIndex }
         rec.segments.append(StoredSegment(index: info.segmentIndex, sha256: info.sha256, byteCount: info.byteCount,
-                                          duration: info.duration, startedAt: info.startedAt,
-                                          receivedAt: Date(), recovered: info.recovered))
+                                          duration: info.duration, startedAt: startedAt,
+                                          receivedAt: Date(), recovered: info.recovered,
+                                          audioDuration: probe.duration, playable: probe.playable))
         rec.segments.sort { $0.index < $1.index }
+        rec.audioPurged = nil
         byId[rec.id] = rec
         statsStorage.stored += 1
         save()
+        lock.unlock()
+        publish()
+
+        if probe.playable == false {
+            EventLog.shared.warn("分段 \(info.recordingId.uuidString.prefix(8))#\(info.segmentIndex) 无法解码（文件可能不完整）")
+        }
+        onSegmentStored?(info.recordingId, info.segmentIndex)
         return .stored
     }
 
@@ -145,6 +220,7 @@ final class RecordingStore: ObservableObject {
         save()
         lock.unlock()
         publish()
+        onRecordingEnded?(id)
     }
 
     func noteLogReceived() {
@@ -155,7 +231,9 @@ final class RecordingStore: ObservableObject {
         publish()
     }
 
-    /// 删除录音：同时删除音频目录和索引记录（阶段 C/D 起还要级联删除转录与摘要）。
+    // MARK: - 删除与清理
+
+    /// 删除录音的音频目录和索引记录。转录、摘要由调用方（AppActions）一并删除。
     func delete(_ id: UUID) {
         lock.lock()
         byId[id] = nil
@@ -164,6 +242,43 @@ final class RecordingStore: ObservableObject {
         try? FileManager.default.removeItem(at: AppPaths.recordings.appendingPathComponent(id.uuidString, isDirectory: true))
         publish()
         EventLog.shared.info("已删除录音 \(id.uuidString.prefix(8)) 及其音频文件")
+    }
+
+    /// 只删除原始音频，保留元数据（文字由 MemoStore 保留）。
+    func purgeAudio(_ id: UUID) {
+        lock.lock()
+        guard var rec = byId[id] else { lock.unlock(); return }
+        rec.audioPurged = true
+        byId[id] = rec
+        save()
+        lock.unlock()
+        try? FileManager.default.removeItem(at: AppPaths.recordings.appendingPathComponent(id.uuidString, isDirectory: true))
+        publish()
+        EventLog.shared.info("按保留策略清理录音 \(id.uuidString.prefix(8)) 的原始音频")
+    }
+
+    /// Recordings 目录占用的空间。
+    func audioBytesOnDisk() -> Int64 {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: AppPaths.recordings, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in e {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
+    // MARK: - 音频探测
+
+    static func probeAudio(_ url: URL) -> (duration: TimeInterval?, playable: Bool) {
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let sr = file.processingFormat.sampleRate
+            guard sr > 0, file.length > 0 else { return (nil, false) }
+            return (Double(file.length) / sr, true)
+        } catch {
+            return (nil, false)
+        }
     }
 
     // MARK: - 持久化（调用方需持有 lock）
@@ -185,7 +300,7 @@ final class RecordingStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         guard let data = try? Data(contentsOf: indexURL),
               let p = try? decoder.decode(Persisted.self, from: data) else { return }
-        byId = Dictionary(uniqueKeysWithValues: p.recordings.map { ($0.id, $0) })
+        byId = Dictionary(p.recordings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         statsStorage = p.stats
     }
 

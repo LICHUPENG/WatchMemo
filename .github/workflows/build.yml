@@ -23,6 +23,7 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -showsdks | grep -Ei "iphoneos|watchos"
+          echo "::notice title=Toolchain::$(xcodebuild -version | tr '\n' ' ')"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -43,6 +44,21 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log
+
+      - name: Report compile errors as annotations
+        if: failure()
+        run: |
+          # 构建日志在部分环境下不方便下载，把编译错误汇总成一条注解，便于在 Checks 页面或 API 中直接查看
+          if [ -f build.log ]; then
+            ERRS=$(grep -E ": error: |error: " build.log | sed -E 's#^.*/(WatchMemo|WatchMemoWatch|Shared)/#\1/#' | sort -u | head -60)
+            if [ -n "$ERRS" ]; then
+              BODY=$(printf '%s' "$ERRS" | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+              echo "::error title=Compile errors::${BODY}"
+            else
+              TAIL=$(tail -40 build.log | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+              echo "::error title=Build failed (log tail)::${TAIL}"
+            fi
+          fi
 
       - name: Verify watch app is embedded
         run: |

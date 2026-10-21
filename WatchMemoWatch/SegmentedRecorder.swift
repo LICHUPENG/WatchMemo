@@ -20,7 +20,7 @@ final class SegmentedRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
     var minFreeBytes: Int64 = 50 * 1024 * 1024
 
     var onSegmentFinished: ((SegmentInfo) -> Void)?
-    var onRecordingEnded: ((_ id: UUID, _ segmentCount: Int, _ endedAt: Date) -> Void)?
+    var onRecordingEnded: ((_ id: UUID, _ segmentCount: Int, _ endedAt: Date, _ duration: TimeInterval) -> Void)?
     var onStartFailed: (() -> Void)?
 
     private var recorder: AVAudioRecorder?
@@ -83,6 +83,7 @@ final class SegmentedRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
         finishCurrentSegment()
         state = .paused
         refreshElapsed()
+        WKInterfaceDevice.current().play(.click)
         log.info("暂停录音，已录 \(completedDuration.clockString)")
     }
 
@@ -101,6 +102,7 @@ final class SegmentedRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
         }
         if startSegment() {
             state = .recording
+            WKInterfaceDevice.current().play(.start)
             log.info("继续录音")
         }
     }
@@ -113,9 +115,10 @@ final class SegmentedRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
         stopUITimer()
         refreshElapsed()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        WKInterfaceDevice.current().play(.stop)
         log.info("结束录音 \(id.uuidString.prefix(8))：共 \(count) 段，总时长 \(completedDuration.clockString)，电量 \(batteryString())")
         recordingId = nil
-        onRecordingEnded?(id, count, Date())
+        onRecordingEnded?(id, count, Date(), completedDuration)
     }
 
     // MARK: - 录音流程
@@ -143,6 +146,7 @@ final class SegmentedRecorder: NSObject, ObservableObject, AVAudioRecorderDelega
         if startSegment() {
             state = .recording
             startUITimer()
+            WKInterfaceDevice.current().play(.start)
             log.info("开始录音 \(recordingId!.uuidString.prefix(8))，分段长度 \(Int(segmentLength))s，电量 \(batteryString())，剩余空间 \(AppPaths.freeSpaceBytes()?.byteString ?? "?")")
         } else {
             recordingId = nil
