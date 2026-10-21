@@ -50,6 +50,7 @@ final class TranscriptionService: ObservableObject {
                 enqueue(SegmentRef(recordingId: rec.id, index: seg.index))
             }
         }
+        if !queued.isEmpty { startWorkerIfNeeded() }
     }
 
     private func segmentArrived(_ id: UUID, _ index: Int) {
@@ -106,6 +107,11 @@ final class TranscriptionService: ObservableObject {
 
     private func drain() async {
         while !queued.isEmpty {
+            // 只在前台转录：后台被唤醒接收文件时时间很短，转录容易失败；回到前台会自动继续
+            if UIApplication.shared.applicationState == .background {
+                log.info("App 在后台，转录暂停（\(queued.count) 个分段待处理）")
+                return
+            }
             if authStatus != .authorized {
                 let ok = await ensureAuthorized()
                 if !ok {
