@@ -36,6 +36,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIFileSharingEnabled: true          # 允许在“文件”App / Finder 中直接查看 Documents
         LSSupportsOpeningDocumentsInPlace: true
+        NSSpeechRecognitionUsageDescription: WatchMemo 使用系统语音识别把手表录音转成文字，优先在本机完成。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kyte.watchmemo

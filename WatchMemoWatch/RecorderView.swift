@@ -4,10 +4,13 @@ struct RecorderView: View {
     @EnvironmentObject private var model: WatchAppModel
     @EnvironmentObject private var recorder: SegmentedRecorder
     @EnvironmentObject private var sync: WatchSyncManager
+    @EnvironmentObject private var history: RecordingHistory
 
     @AppStorage("keepAliveMode") private var modeRaw = KeepAliveMode.backgroundAudio.rawValue
     @AppStorage("segmentLength") private var segmentLength = 60.0
     @AppStorage("minFreeMB") private var minFreeMB = 50
+
+    @State private var confirmStop = false
 
     var body: some View {
         ScrollView {
@@ -15,12 +18,9 @@ struct RecorderView: View {
                 statusLabel
 
                 Text(recorder.elapsed.clockString)
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-
-                Text("分段 #\(recorder.segmentIndex) · 待同步 \(sync.pending.count)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(recorder.state == .recording ? .primary : .secondary)
 
                 controls
 
@@ -31,11 +31,17 @@ struct RecorderView: View {
                         .multilineTextAlignment(.center)
                 }
 
+                footer
+
                 NavigationLink("设置与日志") { SettingsView() }
                     .font(.footnote)
             }
         }
         .navigationTitle("WatchMemo")
+        .confirmationDialog("结束这次录音？", isPresented: $confirmStop) {
+            Button("结束并同步", role: .destructive) { recorder.stop() }
+            Button("继续录音", role: .cancel) {}
+        }
     }
 
     private var statusLabel: some View {
@@ -50,7 +56,7 @@ struct RecorderView: View {
     private var statusText: String {
         switch recorder.state {
         case .idle: return "就绪"
-        case .recording: return "录音中"
+        case .recording: return "录音中 · 可放下手腕"
         case .paused: return "已暂停"
         }
     }
@@ -72,23 +78,46 @@ struct RecorderView: View {
                                      segmentLength: segmentLength,
                                      minFreeMB: minFreeMB)
             } label: {
-                Label("开始录音", systemImage: "mic.fill")
+                ZStack {
+                    Circle().fill(Color.red).frame(width: 76, height: 76)
+                    Image(systemName: "mic.fill").font(.system(size: 30)).foregroundStyle(.white)
+                }
             }
-            .tint(.red)
+            .buttonStyle(.plain)
 
         case .recording, .paused:
-            HStack {
+            HStack(spacing: 14) {
                 if recorder.state == .recording {
-                    Button { recorder.pause() } label: { Image(systemName: "pause.fill") }
-                        .tint(.orange)
+                    roundButton("pause.fill", .orange) { recorder.pause() }
                 } else {
-                    Button { recorder.resume() } label: { Image(systemName: "play.fill") }
-                        .tint(.green)
+                    roundButton("play.fill", .green) { recorder.resume() }
                 }
-                Button { recorder.stop() } label: { Image(systemName: "stop.fill") }
-                    .tint(.red)
+                roundButton("stop.fill", .red) { confirmStop = true }
             }
         }
+    }
+
+    private func roundButton(_ icon: String, _ color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle().fill(color.opacity(0.9)).frame(width: 58, height: 58)
+                Image(systemName: icon).font(.system(size: 22)).foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var footer: some View {
+        VStack(spacing: 2) {
+            if recorder.state != .idle {
+                Text("分段 #\(recorder.segmentIndex) · 待同步 \(sync.pending.count)")
+            } else {
+                Text("今天 \(history.today.count) 条 · \(history.todayDuration.clockString)")
+                Text(sync.pending.isEmpty ? "已全部同步到 iPhone" : "待同步 \(sync.pending.count) 段")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 }
 

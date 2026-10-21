@@ -5,15 +5,17 @@ final class WatchAppModel: ObservableObject {
     let recorder = SegmentedRecorder()
     let keepAlive = KeepAliveController()
     let sync = WatchSyncManager.shared
+    let history = RecordingHistory()
 
     init() {
         sync.activate()
         recorder.onSegmentFinished = { [weak self] info in
             self?.sync.enqueue(info)
         }
-        recorder.onRecordingEnded = { [weak self] id, count, endedAt in
+        recorder.onRecordingEnded = { [weak self] id, count, endedAt, duration in
             self?.sync.enqueueRecordingEnd(id: id, segmentCount: count, endedAt: endedAt)
             self?.keepAlive.stop()
+            self?.history.add(id: id, endedAt: endedAt, duration: duration, segments: count)
         }
         recorder.onStartFailed = { [weak self] in
             self?.keepAlive.stop()
@@ -44,6 +46,7 @@ struct WatchMemoWatchApp: App {
             .environmentObject(model.recorder)
             .environmentObject(model.sync)
             .environmentObject(model.keepAlive)
+            .environmentObject(model.history)
         }
         .onChange(of: scenePhase) { _, phase in
             // 记录前后台切换，配合“定时器停顿”日志判断 App 何时被挂起
