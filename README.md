@@ -1,9 +1,24 @@
 # WatchMemo
 
-个人 AI 录音与记忆助手（Apple Watch + iPhone）。当前处于 **v0.1.0 · 阶段 A：技术验证**。
+个人 AI 录音与记忆助手（Apple Watch + iPhone），参考 Auday 的产品思路。当前为 **v0.1.0 功能版**，等待首轮真机验证。
 
 - 需求文档：[docs/WatchMemo-v0.1.0-需求.md](docs/WatchMemo-v0.1.0-需求.md)
 - 阶段 A 测试计划：[docs/阶段A-技术验证计划.md](docs/阶段A-技术验证计划.md)
+- 首轮真机验证清单：[docs/首轮真机验证清单.md](docs/首轮真机验证清单.md)
+
+## 功能一览
+
+| 模块 | 功能 | 代码 |
+|---|---|---|
+| 手表录音 | 一键录音（震动反馈）、暂停/继续、结束确认、分段保存、三种保活方案、今日统计 | `WatchMemoWatch/` |
+| 同步 | 持久化队列、SHA-256 校验、去重、确认后删除、孤儿分段恢复 | `WatchSyncManager.swift`、`PhoneSyncManager.swift` |
+| 转录 | iOS 系统语音识别（优先设备端）、逐段转录、句级时间戳、静音分段跳过、失败重试、重启续传 | `SpeechEngine.swift`、`TranscriptionService.swift` |
+| 回顾 | 按天时间线、日期筛选、连续播放 / 拖动 / 倍速、点句子跳转播放、当前句高亮、导出文字 | `RecordsView.swift`、`RecordingDetailView.swift`、`RecordingPlayer.swift` |
+| 搜索 | 转录 / 标题 / 摘要关键词搜索、时间范围、命中高亮、直达原句 | `SearchView.swift` |
+| AI（可选） | 单条摘要（标题/概述/要点/待办/待解决）、每日回顾、问问（本地检索 + 模型回答）、待办汇总 | `SummaryService.swift`、`AskService.swift` |
+| 隐私 | 默认关闭云端 AI；只发文字不发音频；每次发送前告知；API Key 存钥匙串；删除级联；音频保留期 | `AIClient.swift`、`Prefs.swift`、`AppActions.swift` |
+
+支持的模型服务：DeepSeek、通义千问（百炼）、Kimi、智谱 GLM、OpenAI、Anthropic，以及任意 OpenAI 兼容接口。
 
 ## 这个 Demo 验证什么
 
@@ -18,7 +33,7 @@
 | 按日期浏览、顺序播放分段、显示缺失分段、删除 | `WatchMemo/ContentView.swift` |
 | 两端事件日志（含电量、定时器停顿检测），可导出做测试记录 | `Shared/EventLog.swift` |
 
-阶段 A 故意不接入 SwiftData、转录和 AI——先把“录得下、不丢、传得到”验证清楚。
+元数据用 JSON 文件保存（`Documents/index.json`、`Documents/Memo/`），音频单独存放在 `Documents/Recordings/`。
 
 ## 同步协议（简述）
 
